@@ -1,9 +1,10 @@
 // ============================================================================
-// HYDRA MASTER - REAL MULTI-COIN SCANNER
+// HYDRA MASTER - REAL MULTI-COIN ARBITRAGE SCANNER
 // ============================================================================
-// Scans 13+ coins on Binance vs Uniswap V3
-// Detects real arbitrage opportunities
-// No environment variables needed!
+// Scans: ETH, BTC, LINK, UNI, MATIC, AAVE, CRV, PEPE, SHIB, ARB
+// Sources: Binance (CEX) vs Uniswap V3 (DEX)
+// Profit Threshold: > $0.01 (execute anything profitable!)
+// NO ENVIRONMENT VARIABLES REQUIRED!
 // ============================================================================
 
 use axum::{
@@ -41,7 +42,7 @@ struct Config {
     usdc_balance: f64,
     min_net_profit: f64,
     
-    // Real costs
+    // Real execution costs
     gas_cost_usd: f64,
     flash_loan_fee_pct: f64,
     dex_fee_pct: f64,
@@ -55,9 +56,9 @@ impl Config {
             usdc_balance: 10000.0,      // $10k capital
             min_net_profit: 0.01,       // Execute anything > $0.01
             
-            gas_cost_usd: 0.15,         // ~$0.15 gas
-            flash_loan_fee_pct: 0.0009, // 0.09% Aave fee
-            dex_fee_pct: 0.003,         // 0.3% swap fee
+            gas_cost_usd: 0.15,         // Gas cost per swap
+            flash_loan_fee_pct: 0.0009, // 0.09% Aave flash loan fee
+            dex_fee_pct: 0.003,         // 0.3% DEX swap fee
             
             server_port: 3000,
         }
@@ -65,67 +66,67 @@ impl Config {
 }
 
 // ============================================================================
-// TARGET PAIRS
+// TARGET TRADING PAIRS
 // ============================================================================
 
 #[derive(Debug, Clone)]
-struct TargetPair {
+struct TradingPair {
     symbol: String,
     binance_ticker: String,
     uniswap_pool_id: String,
 }
 
-fn get_targets() -> Vec<TargetPair> {
+fn get_trading_pairs() -> Vec<TradingPair> {
     vec![
-        TargetPair {
+        TradingPair {
             symbol: "ETH".to_string(),
             binance_ticker: "ETHUSDT".to_string(),
-            uniswap_pool_id: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640".to_string(),
+            uniswap_pool_id: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640".to_string(), // ETH/USDC 0.05%
         },
-        TargetPair {
+        TradingPair {
             symbol: "BTC".to_string(),
             binance_ticker: "BTCUSDT".to_string(),
-            uniswap_pool_id: "0x99ac8ca7087fa4a2a1fb635c111ca1e12ddbc512".to_string(),
+            uniswap_pool_id: "0x99ac8ca7087fa4a2a1fb635c111ca1e12ddbc512".to_string(), // WBTC/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "LINK".to_string(),
             binance_ticker: "LINKUSDT".to_string(),
-            uniswap_pool_id: "0xa6cc3c2531fda946a23ef4bccd70ac2c6612b9ae".to_string(),
+            uniswap_pool_id: "0xa6cc3c2531fda946a23ef4bccd70ac2c6612b9ae".to_string(), // LINK/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "UNI".to_string(),
             binance_ticker: "UNIUSDT".to_string(),
-            uniswap_pool_id: "0xd0fc8ba7e267f2bcad7446cd67f44052633c2efd".to_string(),
+            uniswap_pool_id: "0xd0fc8ba7e267f2bcad7446cd67f44052633c2efd".to_string(), // UNI/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "MATIC".to_string(),
             binance_ticker: "MATICUSDT".to_string(),
-            uniswap_pool_id: "0xa094e60161a0d33e06a3503b44b242d997232230".to_string(),
+            uniswap_pool_id: "0xa374094527e1673a86de625aa59517c5de346d32".to_string(), // MATIC/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "AAVE".to_string(),
             binance_ticker: "AAVEUSDT".to_string(),
-            uniswap_pool_id: "0x1d3658253ee39eb4b30e0719003c973562a9b696".to_string(),
+            uniswap_pool_id: "0x5ab53ee1d50eef2c1dd3d5402789cd27bb52c1bb".to_string(), // AAVE/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "CRV".to_string(),
             binance_ticker: "CRVUSDT".to_string(),
-            uniswap_pool_id: "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36".to_string(),
+            uniswap_pool_id: "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36".to_string(), // CRV/USDT
         },
-        TargetPair {
+        TradingPair {
             symbol: "PEPE".to_string(),
             binance_ticker: "PEPEUSDT".to_string(),
-            uniswap_pool_id: "0x11950d141ecb863f01007add7d1a342041227b58".to_string(),
+            uniswap_pool_id: "0x11950d141ecb863f01007add7d1a342041227b58".to_string(), // PEPE/WETH
         },
-        TargetPair {
+        TradingPair {
             symbol: "SHIB".to_string(),
             binance_ticker: "SHIBUSDT".to_string(),
-            uniswap_pool_id: "0x2f62f2b4c5fcd7570a709dec05d68ea19c7a08ec".to_string(),
+            uniswap_pool_id: "0x2f62f2b4c5fcd7570a709dec05d68ea19c7a08ec".to_string(), // SHIB/USDC
         },
-        TargetPair {
+        TradingPair {
             symbol: "ARB".to_string(),
             binance_ticker: "ARBUSDT".to_string(),
-            uniswap_pool_id: "0xc31e54c7a869b9fcbecc14363cf510d1c41fa443".to_string(),
+            uniswap_pool_id: "0xc31e54c7a869b9fcbecc14363cf510d1c41fa443".to_string(), // ARB/USDC
         },
     ]
 }
@@ -149,6 +150,7 @@ struct Opportunity {
     cost_dex_fees: f64,
     net_profit: f64,
     status: String,
+    required_capital: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +160,9 @@ struct Stats {
     total_profit_usd: f64,
     total_missed_profit: f64,
     biggest_opportunity_usd: f64,
+    profitable_after_fees: u64,
+    missed_insufficient_balance: u64,
+    missed_too_small: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,18 +174,15 @@ enum WsMessage {
         total_profit_usd: f64,
         total_missed_profit: f64,
         biggest_opportunity_usd: f64,
+        profitable_after_fees: u64,
+        missed_insufficient_balance: u64,
+        missed_too_small: u64,
         eth_price: f64,
+        sol_price: f64,
         active_pools: u64,
     },
     Opportunity {
         opportunity: Opportunity,
-    },
-    PriceUpdate {
-        pair: String,
-        binance: f64,
-        uniswap: f64,
-        spread: f64,
-        timestamp: u64,
     },
 }
 
@@ -189,13 +191,14 @@ struct AppState {
     stats: Arc<RwLock<Stats>>,
     opportunities: Arc<RwLock<Vec<Opportunity>>>,
     eth_price: Arc<RwLock<f64>>,
+    sol_price: Arc<RwLock<f64>>,
     ws_tx: broadcast::Sender<WsMessage>,
     config: Arc<Config>,
     http_client: Client,
 }
 
 // ============================================================================
-// API FETCHERS
+// API CLIENTS
 // ============================================================================
 
 #[derive(Deserialize, Debug)]
@@ -203,8 +206,8 @@ struct BinanceTicker {
     price: String,
 }
 
-async fn fetch_binance_price(client: &Client, symbol: &str) -> Option<f64> {
-    let url = format!("https://api.binance.com/api/v3/ticker/price?symbol={}", symbol);
+async fn fetch_binance_price(client: &Client, ticker: &str) -> Option<f64> {
+    let url = format!("https://api.binance.com/api/v3/ticker/price?symbol={}", ticker);
     
     match client.get(&url).send().await {
         Ok(resp) => {
@@ -240,7 +243,7 @@ async fn fetch_uniswap_price(
 ) -> Option<f64> {
     let url = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3";
     let query = serde_json::json!({
-        "query": format!("{{ pool(id: \"{}\") {{ token0Price token1Price }} }}", pool_id)
+        "query": format!("{{ pool(id: \"{}\") {{ token0Price token1Price }} }}", pool_id.to_lowercase())
     });
 
     match client.post(url).json(&query).send().await {
@@ -251,7 +254,7 @@ async fn fetch_uniswap_price(
                         let t0 = pool.token0Price.parse::<f64>().unwrap_or(0.0);
                         let t1 = pool.token1Price.parse::<f64>().unwrap_or(0.0);
 
-                        // Return price closest to Binance reference
+                        // Return the price closest to Binance reference
                         let diff0 = (t0 - ref_price).abs();
                         let diff1 = (t1 - ref_price).abs();
 
@@ -271,42 +274,33 @@ async fn fetch_uniswap_price(
 
 async fn scanner_loop(state: Arc<AppState>) {
     info!("{}", "=================================================".bright_yellow());
-    info!("{}", " 🚀 HYDRA MASTER - MULTI-COIN SCANNER".bright_green());
-    info!("{}", " 💰 Profit Threshold: > $0.01".bright_cyan());
+    info!("{}", " 🚀 HYDRA MASTER - MULTI-COIN SCANNER ACTIVE".bright_green());
+    info!("{}", " 💰 Profit Threshold: > $0.01 (ANY PROFIT!)".bright_cyan());
     info!("{}", "=================================================".bright_yellow());
+    info!("");
 
-    let targets = get_targets();
+    let pairs = get_trading_pairs();
     let mut index = 0;
 
     loop {
-        let target = &targets[index];
-        index = (index + 1) % targets.len();
+        let pair = &pairs[index];
+        index = (index + 1) % pairs.len();
 
         // Fetch Binance price
-        if let Some(binance_price) = fetch_binance_price(&state.http_client, &target.binance_ticker).await {
+        if let Some(binance_price) = fetch_binance_price(&state.http_client, &pair.binance_ticker).await {
             
-            // Update ETH price for dashboard
-            if target.symbol == "ETH" {
+            // Update price trackers
+            if pair.symbol == "ETH" {
                 *state.eth_price.write().await = binance_price;
+            } else if pair.symbol == "SOL" {
+                *state.sol_price.write().await = binance_price;
             }
 
             // Fetch Uniswap price
-            if let Some(uniswap_price) = fetch_uniswap_price(&state.http_client, &target.uniswap_pool_id, binance_price).await {
+            if let Some(uniswap_price) = fetch_uniswap_price(&state.http_client, &pair.uniswap_pool_id, binance_price).await {
                 
                 let spread_pct = ((binance_price - uniswap_price) / uniswap_price).abs() * 100.0;
-                let pair_name = format!("{}/USDC", target.symbol);
-
-                // Send price update
-                let _ = state.ws_tx.send(WsMessage::PriceUpdate {
-                    pair: pair_name.clone(),
-                    binance: binance_price,
-                    uniswap: uniswap_price,
-                    spread: spread_pct,
-                    timestamp: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                });
+                let pair_name = format!("{}/USDC", pair.symbol);
 
                 // Calculate profit
                 let capital = state.config.usdc_balance;
@@ -327,6 +321,7 @@ async fn scanner_loop(state: Arc<AppState>) {
                     "unprofitable"
                 };
 
+                // Log
                 if status == "executed" {
                     info!("{}", format!("✅ {} | Spread: {:.3}% | Net: ${:.2}", 
                         pair_name, spread_pct, net_profit).bright_green());
@@ -335,10 +330,10 @@ async fn scanner_loop(state: Arc<AppState>) {
                         pair_name, spread_pct, net_profit);
                 }
 
-                // Create opportunity
+                // Only send opportunities with reasonable spreads
                 if spread_pct < 50.0 {
                     let opp = Opportunity {
-                        id: format!("opp_{}_{}", target.symbol, 
+                        id: format!("opp_{}_{}", pair.symbol, 
                             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()),
                         timestamp: SystemTime::now()
                             .duration_since(UNIX_EPOCH)
@@ -355,6 +350,7 @@ async fn scanner_loop(state: Arc<AppState>) {
                         cost_dex_fees,
                         net_profit,
                         status: status.to_string(),
+                        required_capital: Some(capital),
                     };
 
                     // Update stats
@@ -365,7 +361,9 @@ async fn scanner_loop(state: Arc<AppState>) {
                         if status == "executed" {
                             stats.total_executed += 1;
                             stats.total_profit_usd += net_profit;
+                            stats.profitable_after_fees += 1;
                         } else if status == "missed_small" {
+                            stats.missed_too_small += 1;
                             stats.total_missed_profit += net_profit.abs();
                         }
 
@@ -383,6 +381,7 @@ async fn scanner_loop(state: Arc<AppState>) {
                     // Broadcast stats
                     let stats = state.stats.read().await;
                     let eth_price = *state.eth_price.read().await;
+                    let sol_price = *state.sol_price.read().await;
                     
                     let _ = state.ws_tx.send(WsMessage::Stats {
                         total_opportunities: stats.total_opportunities,
@@ -390,13 +389,18 @@ async fn scanner_loop(state: Arc<AppState>) {
                         total_profit_usd: stats.total_profit_usd,
                         total_missed_profit: stats.total_missed_profit,
                         biggest_opportunity_usd: stats.biggest_opportunity_usd,
+                        profitable_after_fees: stats.profitable_after_fees,
+                        missed_insufficient_balance: stats.missed_insufficient_balance,
+                        missed_too_small: stats.missed_too_small,
                         eth_price,
-                        active_pools: targets.len() as u64,
+                        sol_price,
+                        active_pools: pairs.len() as u64,
                     });
                 }
             }
         }
 
+        // Scan every 300ms per coin
         sleep(Duration::from_millis(300)).await;
     }
 }
@@ -431,6 +435,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Send initial state
     let stats = state.stats.read().await;
     let eth_price = *state.eth_price.read().await;
+    let sol_price = *state.sol_price.read().await;
 
     let initial = WsMessage::Stats {
         total_opportunities: stats.total_opportunities,
@@ -438,7 +443,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         total_profit_usd: stats.total_profit_usd,
         total_missed_profit: stats.total_missed_profit,
         biggest_opportunity_usd: stats.biggest_opportunity_usd,
+        profitable_after_fees: stats.profitable_after_fees,
+        missed_insufficient_balance: stats.missed_insufficient_balance,
+        missed_too_small: stats.missed_too_small,
         eth_price,
+        sol_price,
         active_pools: 10,
     };
 
@@ -471,7 +480,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     println!("\n{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_green());
-    println!("{}", "    🚀 HYDRA MASTER - MULTI-COIN SCANNER".bright_green());
+    println!("{}", "    🚀 HYDRA MASTER - MULTI-COIN ARBITRAGE SCANNER".bright_green());
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_green());
     println!();
 
@@ -480,9 +489,10 @@ async fn main() -> anyhow::Result<()> {
     println!("💰 Capital: ${:.2}", config.usdc_balance);
     println!("📊 Scanning: ETH, BTC, LINK, UNI, MATIC, AAVE, CRV, PEPE, SHIB, ARB");
     println!("🎯 Min Profit: ${:.2}", config.min_net_profit);
+    println!("⚡ Speed: 300ms per coin (10 coins = 3 sec cycle)");
     println!();
 
-    // Create HTTP client
+    // Create HTTP client with TLS support
     let http_client = Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(10))
@@ -497,9 +507,13 @@ async fn main() -> anyhow::Result<()> {
             total_profit_usd: 0.0,
             total_missed_profit: 0.0,
             biggest_opportunity_usd: 0.0,
+            profitable_after_fees: 0,
+            missed_insufficient_balance: 0,
+            missed_too_small: 0,
         })),
         opportunities: Arc::new(RwLock::new(Vec::new())),
         eth_price: Arc::new(RwLock::new(3500.0)),
+        sol_price: Arc::new(RwLock::new(140.0)),
         ws_tx,
         config,
         http_client,
@@ -524,7 +538,7 @@ async fn main() -> anyhow::Result<()> {
     println!("✓ WebSocket: ws://localhost:3000/api/stats");
     println!("✓ Health: http://localhost:3000/api/health");
     println!();
-    println!("👁️  Scanning markets...");
+    println!("👁️  Scanning markets for arbitrage opportunities...");
     println!();
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
